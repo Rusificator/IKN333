@@ -1,0 +1,156 @@
+#include <iostream>
+#include <string>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+#pragma comment(lib, "Ws2_32.lib")
+#define BUF_SIZE 4096
+
+using namespace std;
+
+void HTTP_Connection(string host, string request) {
+    // Инициализация Winsock
+    WSADATA ws;
+    if (WSAStartup(MAKEWORD(2, 2), &ws) != 0) {
+        cout << "Ошибка WSAStartup! \n";
+        return;
+    }
+
+    // Создание сокета
+    SOCKET s;
+    if ((s = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
+        cout << "Ошибка socket! " << WSAGetLastError() << "\n";
+        WSACleanup();
+        return;
+    }
+
+    // Устанавливаем таймаут на прием данных (5 секунд)
+    int timeout = 5000;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
+
+    // Получаем адрес хоста с использованием getaddrinfo (современный способ)
+    struct addrinfo hints, * result;
+    ZeroMemory(&hints, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    string port = (host == "localhost") ? "8000" : "80";
+
+    int iResult = getaddrinfo(host.c_str(), port.c_str(), &hints, &result);
+    if (iResult != 0) {
+        cout << "Ошибка getaddrinfo! " << iResult << "\n";
+        closesocket(s);
+        WSACleanup();
+        return;
+    }
+
+    cout << "Подключаемся к " << host << ":" << port << "...\n";
+
+    // Устанавливаем соединение с сервером
+    if (connect(s, result->ai_addr, (int)result->ai_addrlen) == SOCKET_ERROR) {
+        cout << "Ошибка connect! " << WSAGetLastError() << "\n";
+        freeaddrinfo(result);
+        closesocket(s);
+        WSACleanup();
+        return;
+    }
+
+    freeaddrinfo(result); // Освобождаем память
+
+    cout << "Подключение установлено. Отправляем запрос...\n";
+
+    // Посылаем запрос
+    if (send(s, request.c_str(), request.size(), 0) == SOCKET_ERROR) {
+        cout << "Ошибка send! " << WSAGetLastError() << "\n";
+        closesocket(s);
+        WSACleanup();
+        return;
+    }
+
+    cout << "Запрос отправлен. Получаем ответ...\n\n";
+
+    // Получаем ответ
+    char buf[BUF_SIZE + 1];
+    int total_bytes = 0;
+    int len;
+
+    // Получаем все части ответа с таймаутом
+    while ((len = recv(s, buf, BUF_SIZE, 0)) > 0) {
+        buf[len] = '\0';
+        cout << buf;
+        total_bytes += len;
+
+        // Если получили полный HTTP-ответ, можно выходить
+        if (strstr(buf, "</html>") != NULL) {
+            break;
+        }
+    }
+
+    if (len == SOCKET_ERROR) {
+        int error = WSAGetLastError();
+        if (error == WSAETIMEDOUT) {
+            cout << "\nТаймаут при получении данных\n";
+        }
+        else {
+            cout << "Ошибка recv! " << error << "\n";
+        }
+    }
+
+    cout << "\n\nВсего получено байт: " << total_bytes << "\n";
+
+    // Закрываем соединение
+    closesocket(s);
+    WSACleanup();
+}
+
+int main() {
+    setlocale(LC_ALL, "rus");
+
+    cout << "\t Веб-клиент\n";
+    for (int i = 0; i < 30; i++) cout << "=";
+    cout << endl;
+
+    cout << "Тип подключения: \n"
+        << "1: Подключиться к HTTP-серверу C++ \n"
+        << "2: Подключиться к www.example.com \n";
+
+    for (int i = 0; i < 30; i++) cout << "-";
+    cout << endl;
+
+    while (true) {
+        int type;
+        cout << "Введите тип подключения (1 или 2, 0 для выхода): ";
+        cin >> type;
+
+        if (type == 0) break;
+
+        if (type == 1) {
+            // Исправленный запрос к локальному серверу
+            HTTP_Connection("localhost",
+                "GET / HTTP/1.1\r\n"
+                "Host: localhost:8000\r\n"
+                "User-Agent: C++-Client\r\n"
+                "Connection: close\r\n"
+                "\r\n");
+        }
+        else if (type == 2) {
+            // Запрос к внешнему серверу
+            HTTP_Connection("www.json.org",
+                "GET /json-en.html HTTP/1.1\r\n"
+                "Host: www.json.org\r\n"
+                "User-Agent: C++-Client\r\n"
+                "Connection: close\r\n"
+                "\r\n");
+        }
+        else {
+            cout << "Неверный выбор!\n";
+        }
+
+        cout << "\nГотово! Можно выбрать другое подключение.\n";
+        for (int i = 0; i < 30; i++) cout << "-";
+        cout << endl;
+    }
+
+    return 0;
+}
