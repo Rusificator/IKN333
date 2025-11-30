@@ -1,0 +1,166 @@
+#include <iostream>
+#include <sstream>
+#include <string>
+
+// Для корректной работы freeaddrinfo в MinGW
+#define _WIN32_WINNT 0x501
+#include <WinSock2.h>
+#include <WS2tcpip.h>
+
+#pragma comment(lib, "Ws2_32.lib")
+#define BUF_SIZE 1024
+
+using std::cerr;
+using namespace std;
+
+int main() {
+    setlocale(LC_ALL, "rus");
+    // Оформление окна
+    cout << "\t HTTP-сервер\n";
+    for (int i = 0; i < 30; i++)
+        cout << "=";
+    cout << "\n";
+
+    WSADATA ws;
+    if (WSAStartup(MAKEWORD(2, 2), &ws)) {
+        cerr << "Ошибка WSAStartup! \n" << WSAGetLastError();
+        return -1;
+    }
+
+    // IP-адрес слушающего сокета сервера
+    addrinfo* addr = NULL;
+
+    // Шаблон для инициализации структуры адреса
+    addrinfo hints;
+    ZeroMemory(&hints, sizeof(hints));
+
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    hints.ai_flags = AI_PASSIVE;
+
+    // Инициализируем структуру, хранящую адрес сокета
+    // Наш HTTP-сервер будет висеть на 8000-м порту localhost
+    if (getaddrinfo("127.0.0.1", "8000", &hints, &addr)) {
+        cerr << "Ошибка getaddrinfo! \n" << WSAGetLastError();
+        WSACleanup();
+        return -1;
+    }
+
+    // Создаем слушающий сокет
+    SOCKET listener = socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);
+    if (listener == INVALID_SOCKET) {
+        cerr << "Ошибка socket! \n" << WSAGetLastError();
+        WSACleanup();
+        return -1;
+    }
+
+    // Добавляем опцию переиспользования адреса
+    int optval = 1;
+    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, (char*)&optval, sizeof(optval));
+
+    // Привязываем слушающий сокет к IP-адресу сервера
+    if (bind(listener, addr->ai_addr, addr->ai_addrlen) == SOCKET_ERROR) {
+        cerr << "Ошибка bind! \n" << WSAGetLastError();
+        closesocket(listener);
+        freeaddrinfo(addr);
+        WSACleanup();
+        return -1;
+    }
+
+    freeaddrinfo(addr); // Освобождаем здесь, так как больше не нужен
+
+    // Инициализируем слушающий сокет
+    if (listen(listener, SOMAXCONN) == SOCKET_ERROR) {
+        cerr << "Ошибка listen! \n" << WSAGetLastError();
+        closesocket(listener);
+        WSACleanup();
+        return -1;
+    }
+
+    cout << "Сервер запущен на 127.0.0.1:8000\nОжидание подключений...\n\n";
+
+    // Цикл приема сообщений
+    while (true) {
+        char buf[BUF_SIZE] = {};
+        SOCKET sClient;
+
+        // Принимаем входящее соединение 
+        sClient = accept(listener, NULL, NULL);
+        if (sClient == INVALID_SOCKET) {
+            cerr << "Ошибка accept! " << WSAGetLastError() << "\n";
+            continue; // Продолжаем принимать соединения даже при ошибке
+        }
+
+        int len = recv(sClient, buf, BUF_SIZE - 1, 0);
+
+        if (len == SOCKET_ERROR) {
+            cerr << "Ошибка recv! " << WSAGetLastError() << "\n";
+            closesocket(sClient);
+            continue;
+        }
+
+        if (len == 0) {
+            cout << "Соединение закрыто клиентом\n";
+            closesocket(sClient);
+            continue;
+        }
+
+        // Обрабатываем успешное соединение
+        cout << "Присоединился новый клиент!\n";
+        buf[len] = '\0';
+
+        // Формируем ответ в формате HTML
+        std::stringstream responseBody, response;
+
+        // Тело ответа
+        responseBody << R"(<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>C++ Socket Server</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #1a1a1a; color: #fff; }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { color: #4CAF50; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        pre { white-space: pre-wrap; font-family: monospace; background: #000; padding: 15px; border: 1px solid #333; }
+        .status { color: #4CAF50; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>C++ HTTP Server - Socket Demonstration</h1>
+        <p><span class="status">✓ Server is running</span></p>
+        <p><strong>Endpoint:</strong> 127.0.0.1:8000</p>
+        <p><strong>Protocol:</strong> HTTP/1.1 over TCP sockets</p>
+        <p><strong>Received request:</strong></p>
+        <pre>)" << buf << R"(</pre>
+        <p><em>This demonstrates raw TCP socket communication with HTTP protocol</em></p>
+    </div>
+</body>
+</html>)";
+
+        // Весь ответ
+        response << "HTTP/1.1 200 OK\r\n"
+            << "Content-Type: text/html; charset=utf-8\r\n"
+            << "Content-Length: " << responseBody.str().length()
+            << "\r\n\r\n"
+            << responseBody.str();
+
+        // Отправляем ответ клиенту
+        if (send(sClient, response.str().c_str(), response.str().length(), 0) == SOCKET_ERROR) {
+            cerr << "Ошибка send! " << WSAGetLastError() << "\n";
+        }
+        else {
+            cout << "Ответ отправлен клиенту\n";
+        }
+
+        // Закрываем соединение
+        closesocket(sClient);
+        cout << "Соединение закрыто\n\n";
+    }
+
+    closesocket(listener);
+    WSACleanup();
+    return 0;
+}
