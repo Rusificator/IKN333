@@ -1,0 +1,73 @@
+#include <iostream>
+#include <string>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+
+int main() {
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        std::cerr << "WSAStartup failed\n";
+        return 1;
+    }
+
+    struct addrinfo hints, *result_addr;
+    ZeroMemory(&hints, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    int result = getaddrinfo("www.example.com", "80", &hints, &result_addr);
+    if (result != 0) {
+        std::cerr << "getaddrinfo failed: " << result << "\n";
+        WSACleanup();
+        return 1;
+    }
+
+    SOCKET connect_socket = socket(result_addr->ai_family, result_addr->ai_socktype, result_addr->ai_protocol);
+    if (connect_socket == INVALID_SOCKET) {
+        std::cerr << "Socket creation failed: " << WSAGetLastError() << "\n";
+        freeaddrinfo(result_addr);
+        WSACleanup();
+        return 1;
+    }
+
+    result = connect(connect_socket, result_addr->ai_addr, (int)result_addr->ai_addrlen);
+    freeaddrinfo(result_addr);
+
+    if (result == SOCKET_ERROR) {
+        std::cerr << "Connect failed: " << WSAGetLastError() << "\n";
+        closesocket(connect_socket);
+        WSACleanup();
+        return 1;
+    }
+
+    std::string request = 
+        "GET / HTTP/1.1\r\n"
+        "Host: www.example.com\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+
+    if (send(connect_socket, request.c_str(), request.length(), 0) == SOCKET_ERROR) {
+        std::cerr << "Send failed: " << WSAGetLastError() << "\n";
+        closesocket(connect_socket);
+        WSACleanup();
+        return 1;
+    }
+
+    char buffer[4096];
+    int bytes_received;
+    std::cout << "Response received:\n";
+    
+    while ((bytes_received = recv(connect_socket, buffer, sizeof(buffer) - 1, 0)) > 0) {
+        buffer[bytes_received] = '\0';
+        std::cout << buffer;
+    }
+
+    closesocket(connect_socket);
+    WSACleanup();
+    
+    std::cout << "\n\nPress Enter to exit...";
+    std::cin.get();
+    return 0;
+}
